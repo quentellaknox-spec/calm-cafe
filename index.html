@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Calm Café</title>
+  <style>
+    body{font-family:Arial, sans-serif; margin:0; background:#f6f7fb; color:#111;}
+    .wrap{max-width:900px; margin:0 auto; padding:18px;}
+    h1{margin:0 0 6px;}
+    .sub{color:#444; font-size:13px; line-height:1.4; margin-bottom:10px;}
+    .grid{display:flex; gap:14px; flex-wrap:wrap;}
+    .card{background:#fff; border-radius:16px; padding:16px; box-shadow:0 6px 18px rgba(0,0,0,.08); flex:1; min-width:280px;}
+    .light{
+      height:260px; border-radius:18px; display:flex; align-items:center; justify-content:center;
+      font-size:46px; font-weight:800; position:relative; overflow:hidden; user-select:none;
+    }
+    .heart{position:absolute; font-size:120px; opacity:.18; right:18px; bottom:-16px;}
+    .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
+    button{padding:12px 14px; border:0; border-radius:12px; font-size:16px; cursor:pointer;}
+    .primary{background:#111; color:#fff;}
+    .secondary{background:#eee;}
+    .pill{display:inline-block; padding:6px 10px; border-radius:999px; background:#eef; font-size:14px;}
+    .meter{height:14px; background:#e9e9ee; border-radius:999px; overflow:hidden; margin-top:8px;}
+    .bar{height:100%; width:0%; background:#111;}
+    input[type="range"]{width:100%;}
+    .status{font-size:16px; line-height:1.4; margin-top:10px;}
+    .countdown{font-size:34px; font-weight:900; margin-top:8px;}
+    .small{font-size:13px; color:#444; line-height:1.4;}
+    .title2{font-weight:800; margin:0 0 8px;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Calm Café</h1>
+    <div class="sub">
+      This tool measures overall volume to help keep lunch calm and safe.
+      It does <b>not</b> record voices or save audio.
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div id="light" class="light">Ready</div>
+        <div id="status" class="status">Press <b>Start</b> to begin.</div>
+        <div id="countdown" class="countdown"></div>
+      </div>
+
+      <div class="card">
+        <div class="title2">Live Volume</div>
+        <div class="row" style="margin-bottom:8px;">
+          <span class="pill">Level: <span id="level">—</span></span>
+          <span class="pill">Score: <span id="score">—</span></span>
+        </div>
+        <div class="meter"><div id="bar" class="bar"></div></div>
+
+        <div style="height:10px;"></div>
+        <div class="title2">Thresholds</div>
+
+        <div class="small">Green → Yellow (getting loud): <b><span id="yVal">45</span></b></div>
+        <input id="y" type="range" min="10" max="90" value="45" />
+
+        <div style="height:8px;"></div>
+        <div class="small">Yellow → Red (too loud): <b><span id="rVal">65</span></b></div>
+        <input id="r" type="range" min="10" max="90" value="65" />
+
+        <div style="height:12px;"></div>
+        <div class="title2">Controls</div>
+        <div class="row">
+          <button class="primary" id="start">Start</button>
+          <button class="secondary" id="stop" disabled>Stop</button>
+          <button class="secondary" id="test">Test Siren</button>
+        </div>
+
+        <div style="height:10px;"></div>
+        <div class="small">
+          Tip: Use a school tablet/laptop facing the cafeteria. When it turns <b>Red</b>, the tool starts a
+          <b>2-minute quiet reset</b>.
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const light = document.getElementById('light');
+  const status = document.getElementById('status');
+  const countdownEl = document.getElementById('countdown');
+  const bar = document.getElementById('bar');
+  const levelEl = document.getElementById('level');
+  const scoreEl = document.getElementById('score');
+
+  const y = document.getElementById('y');
+  const r = document.getElementById('r');
+  const yVal = document.getElementById('yVal');
+  const rVal = document.getElementById('rVal');
+
+  const startBtn = document.getElementById('start');
+  const stopBtn = document.getElementById('stop');
+  const testBtn = document.getElementById('test');
+
+  let audioCtx, analyser, dataArray, stream, rafId;
+  let quietUntil = 0;
+  let state = "READY";
+  let lastSpeak = 0;
+
+  const affirmations = [
+    "Great job using calm voices.",
+    "Thank you for being respectful.",
+    "You are helping keep lunch safe.",
+    "Nice work. Keep it at a calm level."
+  ];
+
+  function updateLabels() {
+    yVal.textContent = y.value;
+    rVal.textContent = r.value;
+  }
+  y.addEventListener('input', updateLabels);
+  r.addEventListener('input', updateLabels);
+  updateLabels();
+
+  function setLight(newState) {
+    state = newState;
+    countdownEl.textContent = "";
+    light.innerHTML = "";
+
+    if (newState === "GREEN") {
+      light.style.background = "#d9f7df";
+      light.innerHTML = `GREEN <div class="heart">♥</div>`;
+    } else if (newState === "YELLOW") {
+      light.style.background = "#fff4cc";
+      light.textContent = "YELLOW";
+    } else if (newState === "RED") {
+      light.style.background = "#ffd6d6";
+      light.textContent = "RED";
+    } else {
+      light.style.background = "#e9ecf3";
+      light.textContent = "Ready";
+    }
+  }
+
+  function speak(text) {
+    try {
+      if (!('speechSynthesis' in window)) return;
+      const now = Date.now();
+      if (now - lastSpeak < 7000) return; // don’t spam
+      lastSpeak = now;
+
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.rate = 1.0;
+      u.pitch = 1.1;
+      u.volume = 1.0;
+      window.speechSynthesis.speak(u);
+    } catch {}
+  }
+
+  function siren() {
+    try {
+      const ctx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.connect(g);
+      g.connect(ctx.destination);
+      g.gain.value = 0.0001;
+
+      const t = ctx.currentTime;
+      g.gain.exponentialRampToValueAtTime(0.18, t + 0.02);
+      o.frequency.setValueAtTime(700, t);
+      o.frequency.linearRampToValueAtTime(1100, t + 0.35);
+      o.frequency.linearRampToValueAtTime(700, t + 0.7);
+
+      o.start(t);
+      o.stop(t + 0.75);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.75);
+    } catch {}
+  }
+
+  function startReset() {
+    quietUntil = Date.now() + 2 * 60 * 1000;
+    siren();
+    speak("Too loud. Quiet reset for two minutes. Then we try again.");
+  }
+
+  function updateCountdown() {
+    if (!quietUntil) return;
+    const remaining = quietUntil - Date.now();
+    if (remaining <= 0) {
+      quietUntil = 0;
+      countdownEl.textContent = "";
+      speak("Reset complete. Thank you. Use calm voices.");
+      return;
+    }
+    const s = Math.ceil(remaining / 1000);
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    countdownEl.textContent = `Quiet Reset: ${m}:${String(sec).padStart(2,'0')}`;
+  }
+
+  function rmsScore() {
+    analyser.getByteTimeDomainData(dataArray);
+    let sum = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+      const v = (dataArray[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / dataArray.length);
+    return Math.min(100, Math.max(0, rms * 180));
+  }
+
+  function loop() {
+    if (!analyser) return;
+
+    updateCountdown();
+
+    const score = rmsScore();
+    scoreEl.textContent = score.toFixed(0);
+    bar.style.width = `${Math.min(100, score)}%`;
+
+    const yTh = Number(y.value);
+    const rTh = Number(r.value);
+
+    if (quietUntil) {
+      setLight("RED");
+      levelEl.textContent = "RESET";
+      status.innerHTML = "We are doing a <b>2-minute quiet reset</b> so everyone can calm down and be safe.";
+      rafId = requestAnimationFrame(loop);
+      return;
+    }
+
+    let next = "GREEN";
+    if (score >= rTh) next = "RED";
+    else if (score >= yTh) next = "YELLOW";
+
+    levelEl.textContent = next;
+
+    if (next === "GREEN") {
+      setLight("GREEN");
+      status.textContent = "Calm voices. Great job! Keep it at a friendly conversation level.";
+      if (Math.random() < 0.02) speak(affirmations[Math.floor(Math.random() * affirmations.length)]);
+    } else if (next === "YELLOW") {
+      setLight("YELLOW");
+      status.textContent = "Getting loud. Please lower your voice so everyone can enjoy lunch.";
+      if (state !== "YELLOW") speak("Getting loud. Please lower your voice.");
+    } else {
+      setLight("RED");
+      status.innerHTML = "<b>Too loud.</b> We will pause and reset for two minutes.";
+      startReset();
+    }
+
+    rafId = requestAnimationFrame(loop);
+  }
+
+  async function start() {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      await audioCtx.resume();
+
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      const source = audioCtx.createMediaStreamSource(stream);
+
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 2048;
+      dataArray = new Uint8Array(analyser.fftSize);
+
+      source.connect(analyser);
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+
+      setLight("READY");
+      status.textContent = "Listening…";
+      loop();
+    } catch (e) {
+      setLight("READY");
+      status.innerHTML = "Microphone access was blocked. Please allow mic access and try again.";
+      console.error(e);
+    }
+  }
+
+  function stop() {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+    if (audioCtx) {
+      audioCtx.close();
+      audioCtx = null;
+    }
+
+    analyser = null;
+    dataArray = null;
+    quietUntil = 0;
+
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+
+    setLight("READY");
+    status.textContent = "Stopped. Press Start to begin again.";
+    levelEl.textContent = "—";
+    scoreEl.textContent = "—";
+    bar.style.width = "0%";
+  }
+
+  startBtn.addEventListener('click', start);
+  stopBtn.addEventListener('click', stop);
+  testBtn.addEventListener('click', () => {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    siren();
+  });
+
+  setLight("READY");
+})();
+</script>
+</body>
+</html>
